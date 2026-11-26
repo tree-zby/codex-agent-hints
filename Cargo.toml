@@ -1,0 +1,24 @@
+[package]
+name = "codex-agent-hints"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+description = "Agent Hint protocol (X-Agent-Hint, v1.0) sender for Codex CLI: session, lifecycle, priority and KV-cache hints over HTTP headers."
+repository = "https://github.com/tree-zby/codex-agent-hints"
+readme = "README.md"
+keywords = ["agent-hint", "kv-cache", "llm-inference", "codex"]
+categories = ["development-tools"]
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "allow", priority = -1 }

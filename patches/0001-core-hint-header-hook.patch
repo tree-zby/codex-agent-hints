@@ -1,0 +1,223 @@
+diff --git a/codex-rs/core/src/agent_hint_headers.rs b/codex-rs/core/src/agent_hint_headers.rs
+new file mode 100755
+index 0000000..92f8ae8
+--- /dev/null
++++ b/codex-rs/core/src/agent_hint_headers.rs
+@@ -0,0 +1,178 @@
++//! Generic outbound hint-header hook for model requests.
++//!
++//! Hosts that must annotate every model request (routing, quota, cache
++//! affinity, agent-hint protocols) install one provider here. The hook is
++//! optional and process-wide: with nothing installed, requests are
++//! byte-for-byte unchanged.
++//!
++//! The provider runs in-process and receives a read-only JSON view of the
++//! request body that is about to be sent. It may only add headers.
++//!
++//! Transport note: a hint that changes between requests cannot ride a
++//! long-lived WebSocket, because the handshake headers are fixed when the
++//! connection opens. While a provider is installed, [`crate::client`] keeps
++//! Responses traffic on HTTP so every request carries its own headers.
++
++use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
++
++use codex_api::ResponsesApiRequest;
++use http::{HeaderMap, HeaderName, HeaderValue};
++use serde_json::Value;
++
++use crate::responses_metadata::{CodexResponsesMetadata, CodexResponsesRequestKind};
++
++/// Facts the host may use when deriving outbound headers.
++pub struct HintHeadersContext<'a> {
++    /// Model id after any alias resolution the client already applied.
++    pub model: &'a str,
++    /// Stable id of the conversation this request belongs to.
++    pub thread_id: &'a str,
++    /// `turn` / `prewarm` / `compaction` / `memory`.
++    ///
++    /// Only `turn` is the main line; every other kind is auxiliary and must
++    /// stay unannotated.
++    pub request_kind: &'a str,
++    /// The JSON body that will be sent with this request. Read-only.
++    pub body: &'a Value,
++}
++
++/// Returns `(name, value)` pairs to add to one outbound request.
++///
++/// The provider MUST NOT call [`set_hint_headers_provider`]: the read lock is
++/// released before it runs, but re-entrancy is still undefined.
++pub type HintHeadersProvider =
++    dyn Fn(&HintHeadersContext<'_>) -> Vec<(String, String)> + Send + Sync;
++
++static PROVIDER: RwLock<Option<Arc<HintHeadersProvider>>> = RwLock::new(None);
++
++fn read_lock() -> RwLockReadGuard<'static, Option<Arc<HintHeadersProvider>>> {
++    PROVIDER.read().unwrap_or_else(PoisonError::into_inner)
++}
++
++fn write_lock() -> RwLockWriteGuard<'static, Option<Arc<HintHeadersProvider>>> {
++    PROVIDER.write().unwrap_or_else(PoisonError::into_inner)
++}
++
++/// Install the process-wide provider, returning the previous one.
++pub fn set_hint_headers_provider(
++    provider: Option<Arc<HintHeadersProvider>>,
++) -> Option<Arc<HintHeadersProvider>> {
++    std::mem::replace(&mut *write_lock(), provider)
++}
++
++/// Remove the provider, returning it.
++pub fn clear_hint_headers_provider() -> Option<Arc<HintHeadersProvider>> {
++    set_hint_headers_provider(None)
++}
++
++/// True when a provider is installed.
++///
++/// While true, the WebSocket transport is disabled: per-request headers cannot
++/// be varied on an already-open connection.
++pub fn hint_headers_active() -> bool {
++    read_lock().is_some()
++}
++
++/// Validated header pairs for one request.
++///
++/// Invalid names or values are skipped: a broken provider must never fail a
++/// model call.
++fn header_pairs(context: &HintHeadersContext<'_>) -> Vec<(HeaderName, HeaderValue)> {
++    let provider = read_lock().as_ref().map(Arc::clone);
++    let Some(provider) = provider else {
++        return Vec::new();
++    };
++    provider(context)
++        .into_iter()
++        .filter_map(|(name, value)| {
++            let name = HeaderName::from_bytes(name.as_bytes()).ok()?;
++            let value = HeaderValue::from_str(&value).ok()?;
++            Some((name, value))
++        })
++        .collect()
++}
++
++fn request_kind_label(metadata: &CodexResponsesMetadata) -> &'static str {
++    match metadata.request_kind {
++        Some(CodexResponsesRequestKind::Turn) => "turn",
++        Some(CodexResponsesRequestKind::Prewarm) => "prewarm",
++        Some(CodexResponsesRequestKind::Compaction(_)) => "compaction",
++        Some(CodexResponsesRequestKind::Memory) => "memory",
++        None => "unknown",
++    }
++}
++
++/// Add provider headers to one Responses request.
++///
++/// Auxiliary calls (prewarm, compaction, memory) never carry a hint, so this
++/// returns before serialising their bodies.
++pub(crate) fn apply(
++    extra_headers: &mut HeaderMap,
++    responses_metadata: &CodexResponsesMetadata,
++    request: &ResponsesApiRequest,
++) {
++    if !hint_headers_active() {
++        return;
++    }
++    let kind = request_kind_label(responses_metadata);
++    if kind != "turn" {
++        return;
++    }
++    let Ok(body) = serde_json::to_value(request) else {
++        return;
++    };
++    let context = HintHeadersContext {
++        model: &request.model,
++        thread_id: &responses_metadata.thread_id,
++        request_kind: kind,
++        body: &body,
++    };
++    for (name, value) in header_pairs(&context) {
++        extra_headers.insert(name, value);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Mutex;
++
++    // The provider is process-wide; keep the mutation in one test.
++    #[test]
++    fn installs_and_validates_header_pairs() {
++        let _guard = TEST_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
++        let body = serde_json::json!({"input": []});
++        let context = HintHeadersContext {
++            model: "gpt-5",
++            thread_id: "thread-1",
++            request_kind: "turn",
++            body: &body,
++        };
++        assert!(header_pairs(&context).is_empty());
++        assert!(!hint_headers_active());
++
++        set_hint_headers_provider(Some(Arc::new(
++            |ctx: &HintHeadersContext<'_>| {
++                vec![
++                    (
++                        "X-Agent-Hint".to_string(),
++                        format!("{}/{}", ctx.thread_id, ctx.request_kind),
++                    ),
++                    ("bad header".to_string(), "dropped".to_string()),
++                ]
++            },
++        )));
++        assert!(hint_headers_active());
++
++        let pairs = header_pairs(&context);
++        assert_eq!(pairs.len(), 1);
++        assert_eq!(pairs[0].0.as_str(), "x-agent-hint");
++        assert_eq!(pairs[0].1.to_str().unwrap(), "thread-1/turn");
++
++        assert!(clear_hint_headers_provider().is_some());
++        assert!(header_pairs(&context).is_empty());
++        assert!(!hint_headers_active());
++    }
++
++    static TEST_LOCK: Mutex<()> = Mutex::new(());
++}
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index 2beee06..850729a 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -1430,6 +1430,10 @@ impl ModelClient {
+     ///
+     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+     pub fn responses_websocket_enabled(&self) -> bool {
++        if crate::agent_hint_headers::hint_headers_active() {
++            // Hint headers change per request; a WebSocket pins its handshake headers.
++            return false;
++        }
+         if !self.state.provider.info().supports_websockets
+             || self.state.disable_websockets.load(Ordering::Relaxed)
+         {
+@@ -2195,6 +2199,11 @@ impl ResponsesHttpExecutor<'_> {
+                 responses_metadata,
+                 include_internal,
+             )?;
++            crate::agent_hint_headers::apply(
++                &mut options.extra_headers,
++                responses_metadata,
++                &request,
++            );
+             if self.client.uses_codex_backend(client_setup.auth.as_ref()) {
+                 request.request_country = responses_metadata.request_country.clone();
+             }
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index e3e1d9a..543a0b0 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -5,6 +5,7 @@
+ // the TUI or the tracing stack).
+ #![deny(clippy::print_stdout, clippy::print_stderr)]
+ 
++pub mod agent_hint_headers;
+ mod apply_patch;
+ mod apps;
+ mod client;

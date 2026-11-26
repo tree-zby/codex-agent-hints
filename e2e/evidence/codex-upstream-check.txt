@@ -1,0 +1,57 @@
+# Patch verification — codex-rs @ 9e51c74 (2026-11-26)
+
+## 1. Patch shape
+
+```
+$ git apply --stat patches/0001-core-hint-header-hook.patch
+ codex-rs/core/src/agent_hint_headers.rs | 178 +++++++++++++++++++++++++++++++
+ codex-rs/core/src/client.rs             |   9 ++
+ codex-rs/core/src/lib.rs                |   1 +
+ 3 files changed, 188 insertions(+)
+```
+
+## 2. Applies to a clean checkout
+
+```
+$ git worktree add --detach /tmp/codex-clean 9e51c74
+$ cd /tmp/codex-clean
+$ git apply --check .../patches/0001-core-hint-header-hook.patch
+APPLY_OK
+```
+
+## 3. The patched crate compiles
+
+`cargo check -p codex-core` inside the full workspace never gets past dependency
+resolution: it fetches the Chromium/V8 submodule chain
+(`rusty_v8` → `chromium_build`, `icu`, `abseil-cpp`, `llvm-project`, …). That is
+unrelated to `core` and does not finish on a constrained network.
+
+Instead the check uses `e2e/probe/`: an out-of-workspace crate that depends on
+the patched `codex-core` by path and reuses `codex-rs/Cargo.lock` plus the
+workspace `[patch.crates-io]` table.
+
+```
+$ cargo check -j 12
+    Checking codex-core v0.0.0 (.../codex-rs/core)
+warning: unused variable: `include_internal`
+   --> codex-rs/core/src/responses_metadata.rs:361:42
+    = note: pre-existing upstream warning, untouched by this patch
+    Finished `dev` profile [unoptimized + debuginfo] target(s)
+EXIT=0
+```
+
+Both `client.rs` hunks and the new module compile.
+
+## 4. The hook contract behaves
+
+```
+$ cargo test --test hint_headers -- --nocapture
+running 1 test
+test provider_plumbing_is_process_wide_and_optional ... ok
+test result: ok. 1 passed; 0 failed
+EXIT=0
+```
+
+See `e2e/probe/` for what this does and does not cover. An in-tree wiremock test
+of `ModelClientSession::stream` is not claimed: the outbound-wire evidence in
+`codex.json` comes from an HTTP stub that the crate itself drives.
