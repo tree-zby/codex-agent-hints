@@ -16,9 +16,7 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use codex_agent_hints::adapter::{HintStore, RequestFacts};
-use codex_agent_hints::{
-    decode, validate, HintConfig, ManageClient, State, HEADER_NAME,
-};
+use codex_agent_hints::{decode, validate, HintConfig, ManageClient, State, HEADER_NAME};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone)]
@@ -180,7 +178,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let header = store
         .headers(&facts_turn_1)
         .ok_or("expected a hint on the first turn")?;
-    post(addr, &[(header.name.into(), header.value.clone())], &body_turn_1)?;
+    post(
+        addr,
+        &[(header.name.into(), header.value.clone())],
+        &body_turn_1,
+    )?;
     sent.push(("turn:start", header.value, body_turn_1.clone()));
     store.note_accepted("thread-capture");
     store.note_response_end("thread-capture", Some(1.0));
@@ -207,7 +209,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let header = store
         .headers(&facts_tool)
         .ok_or("expected a hint on the tool continuation")?;
-    post(addr, &[(header.name.into(), header.value.clone())], &body_tool)?;
+    post(
+        addr,
+        &[(header.name.into(), header.value.clone())],
+        &body_tool,
+    )?;
     sent.push(("turn:tool-continuation", header.value, body_tool.clone()));
     store.note_accepted("thread-capture");
 
@@ -229,7 +235,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind,
             &serde_json::from_str(&body)?,
         );
-        assert!(store.headers(&facts).is_none(), "{label} must stay unannotated");
+        assert!(
+            store.headers(&facts).is_none(),
+            "{label} must stay unannotated"
+        );
         post(addr, &[], &body)?;
         sent.push((label, String::new(), body));
     }
@@ -268,7 +277,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let header = store
         .headers(&facts_turn_2)
         .ok_or("expected a hint after the rewrite")?;
-    post(addr, &[(header.name.into(), header.value.clone())], &body_turn_2)?;
+    post(
+        addr,
+        &[(header.name.into(), header.value.clone())],
+        &body_turn_2,
+    )?;
     sent.push(("turn:after-compact", header.value, body_turn_2.clone()));
     store.note_accepted("thread-capture");
 

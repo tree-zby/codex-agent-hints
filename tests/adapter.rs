@@ -105,9 +105,15 @@ fn session_id_is_stable_per_thread_and_distinct_across_threads() {
     let store = store();
     let body = turn_body(vec![user_item("hello")]);
 
-    let a1 = store.headers(&RequestFacts::from_body("thread-a", "gpt-5", "turn", &body)).unwrap();
-    let a2 = store.headers(&RequestFacts::from_body("thread-a", "gpt-5", "turn", &body)).unwrap();
-    let b1 = store.headers(&RequestFacts::from_body("thread-b", "gpt-5", "turn", &body)).unwrap();
+    let a1 = store
+        .headers(&RequestFacts::from_body("thread-a", "gpt-5", "turn", &body))
+        .unwrap();
+    let a2 = store
+        .headers(&RequestFacts::from_body("thread-a", "gpt-5", "turn", &body))
+        .unwrap();
+    let b1 = store
+        .headers(&RequestFacts::from_body("thread-b", "gpt-5", "turn", &body))
+        .unwrap();
 
     let id = |value: &str| decode(value).unwrap()["session"]["session_id"].clone();
     assert_eq!(id(&a1.value), id(&a2.value));
@@ -163,8 +169,8 @@ fn unknown_item_kinds_still_occupy_a_slot() {
 fn manage_requests_use_responses_placeholder_body() {
     let mut session =
         HintSession::new(Some("ah-manage".to_string()), HintConfig::default()).unwrap();
-    let client = ManageClient::new("https://gateway.example.com/v1/", "gpt-5")
-        .with_bearer_token("sk-test");
+    let client =
+        ManageClient::new("https://gateway.example.com/v1/", "gpt-5").with_bearer_token("sk-test");
 
     let request = client.compact(&mut session).expect("compact builds");
     assert_eq!(request.method, "POST");
@@ -172,7 +178,10 @@ fn manage_requests_use_responses_placeholder_body() {
     assert_eq!(session.epoch, 1, "compact supersedes the old epoch");
 
     let body: Value = serde_json::from_str(&request.body).unwrap();
-    assert_eq!(body, json!({"model": "gpt-5", "input": [], "stream": false}));
+    assert_eq!(
+        body,
+        json!({"model": "gpt-5", "input": [], "stream": false})
+    );
 
     let header = request
         .headers
@@ -194,11 +203,14 @@ fn manage_requests_use_responses_placeholder_body() {
 
 #[test]
 fn lifecycle_verbs_do_not_touch_the_epoch() {
-    let mut session =
-        HintSession::new(Some("ah-life".to_string()), HintConfig::default()).unwrap();
+    let mut session = HintSession::new(Some("ah-life".to_string()), HintConfig::default()).unwrap();
     let client = ManageClient::new("http://127.0.0.1:1/v1", "gpt-5");
 
-    for (verb, edit) in [("pause", "offload"), ("resume", "prefetch"), ("stop", "evict")] {
+    for (verb, edit) in [
+        ("pause", "offload"),
+        ("resume", "prefetch"),
+        ("stop", "evict"),
+    ] {
         let state = parse_verb(verb).expect("known verb");
         let request = client.lifecycle(&mut session, state).unwrap();
         assert_eq!(session.epoch, 0);

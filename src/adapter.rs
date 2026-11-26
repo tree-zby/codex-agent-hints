@@ -77,12 +77,7 @@ impl RequestFacts {
     /// classified by the host. The body is the Responses API payload:
     /// `input[]` items plus a `tools` array.
     #[must_use]
-    pub fn from_body(
-        thread_id: &str,
-        model: &str,
-        kind_label: &str,
-        body: &Value,
-    ) -> Self {
+    pub fn from_body(thread_id: &str, model: &str, kind_label: &str, body: &Value) -> Self {
         let input = body
             .get("input")
             .map_or_else(Vec::new, responses_message_views);
@@ -151,9 +146,7 @@ impl HintStore {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<String, HintSession>> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.sessions.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Build and encode the hint for one ordinary request.
@@ -203,7 +196,9 @@ impl HintStore {
 
     /// Idempotent: a second call keeps the first session id.
     pub fn session_id(&self, thread_id: &str) -> Option<String> {
-        self.lock().get(thread_id).map(|session| session.session_id.clone())
+        self.lock()
+            .get(thread_id)
+            .map(|session| session.session_id.clone())
     }
 
     pub fn note_accepted(&self, thread_id: &str) {
@@ -220,7 +215,9 @@ impl HintStore {
 
     /// Record a committed history rewrite; return the superseded epoch.
     pub fn note_rewrite(&self, thread_id: &str) -> Option<u64> {
-        self.lock().get_mut(thread_id).map(HintSession::note_rewrite)
+        self.lock()
+            .get_mut(thread_id)
+            .map(HintSession::note_rewrite)
     }
 
     pub fn isolate(&self, thread_id: &str) {
@@ -250,7 +247,11 @@ impl HintStore {
             .unwrap_or_default())
     }
 
-    pub fn with_session<R>(&self, thread_id: &str, f: impl FnOnce(&mut HintSession) -> R) -> Option<R> {
+    pub fn with_session<R>(
+        &self,
+        thread_id: &str,
+        f: impl FnOnce(&mut HintSession) -> R,
+    ) -> Option<R> {
         self.lock().get_mut(thread_id).map(f)
     }
 }
